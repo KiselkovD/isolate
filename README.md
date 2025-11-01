@@ -96,6 +96,14 @@
 
 ## Сборка
 
+Для скачивание Alpine minirootfs 3.10.1 (x86_64):
+
+```bash
+wget https://dl-cdn.alpinelinux.org/alpine/v3.10/releases/x86_64/alpine-minirootfs-3.10.1-x86_64.tar.gz
+mkdir -p rootfs
+tar -xzf alpine-minirootfs-3.10.1-x86_64.tar.gz -C rootfs
+```
+
 Для сборки проекта требуется `gcc` и стандартные системные заголовки для работы с namespaces и cgroups.
 
 Выполните:
