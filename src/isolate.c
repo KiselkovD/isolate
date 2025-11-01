@@ -95,7 +95,7 @@ static int cmd_exec(void *arg)
     await_setup(params->fd[0]);
 
     // Настраиваем mount namespace с корневой файловой системой rootfs
-    prepare_mntns("../rootfs");
+    prepare_mntns("rootfs");
 
     // Демонстрация IPC namespace — создаём очередь сообщений
     int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0666);

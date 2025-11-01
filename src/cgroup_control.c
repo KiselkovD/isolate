@@ -69,17 +69,6 @@ void cgroup_set_memory_limit(const char *max_bytes)
 }
 
 /**
- * @brief Устанавливает лимит ввода-вывода (io.max) в cgroup
- * @param io_limit Строка ограничения IO (формат зависит от контроллера)
- */
-void cgroup_set_io_limit(const char *io_limit)
-{
-    char path[256];
-    snprintf(path, sizeof(path), "%s/io.max", CGROUP_PATH);
-    write_to_file(path, io_limit);
-}
-
-/**
  * @brief Ограничивает количество процессов в cgroup (pids.max)
  * @param max_pids Максимальное количество процессов (например "50")
  */
@@ -115,7 +104,6 @@ void cgroup_init_and_limit(pid_t pid)
     // Пример лимитов
     cgroup_set_cpu_limit("20000 100000");  // 20% CPU
     cgroup_set_memory_limit("50M");        // 50 МБ памяти
-    cgroup_set_io_limit("8:16 rbps=20971520 wbps=20971520");                // Устанавливаем лимит IO для диска 8:16 до 20 МБайт/с
     cgroup_set_pids_limit("50");           // Максимум 50 процессов
 
     cgroup_add_process(pid);
