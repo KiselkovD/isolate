@@ -1,0 +1,5 @@
+rootfs/
+obj/
+$(TARGET)
+*.o
+isolate

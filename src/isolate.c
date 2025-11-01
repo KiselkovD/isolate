@@ -1,4 +1,4 @@
-#define _GNU_SOURCE 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -11,22 +11,45 @@
 #include <memory.h>
 #include <syscall.h>
 #include <errno.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include "util.h"
 #include "netns.h"
+#include "cgroup_control.h"
 
-static void prepare_procfs();
+/**
+ * @brief Настраивает mount namespace с pivot_root и монтирует procfs
+ *
+ * @param rootfs Путь к корневой файловой системе
+ */
 static void prepare_mntns(char *rootfs);
 
+/**
+ * @brief Монтирует файловую систему proc
+ */
+static void prepare_procfs();
+
+/**
+ * @brief Структура параметров для передачи между процессами
+ */
 struct params {
-    int fd[2];
-    char **argv;
+    int fd[2];       /**< Дескрипторы для pipe связи между процессами */
+    char **argv;     /**< Аргументы для запускаемой команды */
 };
 
+/**
+ * @brief Парсит аргументы командной строки, пропуская имя бинарника
+ *
+ * @param argc Количество аргументов
+ * @param argv Массив аргументов
+ * @param params Структура параметров для заполнения
+ */
 static void parse_args(int argc, char **argv,
                        struct params *params)
 {
 #define NEXT_ARG() do { argc--; argv++; } while (0)
-    // Skip binary path
+
+    // Пропускаем имя исполняемого файла
     NEXT_ARG();
 
     if (argc < 1) {
@@ -41,30 +64,46 @@ static void parse_args(int argc, char **argv,
 #define STACKSIZE (1024*1024)
 static char cmd_stack[STACKSIZE];
 
+/**
+ * @brief Ожидает сигнал о завершении настройки из pipe
+ *
+ * @param pipe Файловый дескриптор для чтения из pipe
+ */
 void await_setup(int pipe)
 {
-    // We're done once we read something from the pipe.
     char buf[2];
     if (read(pipe, buf, 2) != 2)
         die("Failed to read from pipe: %m\n");
 }
 
+/**
+ * @brief Функция, которая будет исполнена в дочернем процессе.
+ * Создаёт IPC очередь (демонстрация работы IPC namespace),
+ * монтирует файловые системы, снижает привилегии и запускает команду.
+ *
+ * @param arg Аргумент с параметрами командной строки
+ * @return int Возвращает 1 при ошибке
+ */
 static int cmd_exec(void *arg)
 {
-    // Kill the cmd process if the isolate process dies.
     if (prctl(PR_SET_PDEATHSIG, SIGKILL))
         die("cannot PR_SET_PDEATHSIG for child process: %m\n");
 
     struct params *params = (struct params*) arg;
-    // Wait for 'setup done' signal from the main process.
+
+    // Ожидаем, пока основной процесс закончит настройки
     await_setup(params->fd[0]);
 
+    // Настраиваем mount namespace с корневой файловой системой rootfs
     prepare_mntns("rootfs");
 
-    // Assuming, 0 in the current namespace maps to
-    // a non-privileged UID in the parent namespace,
-    // drop superuser privileges if any by enforcing
-    // the exec'ed process runs with UID 0.
+    // Демонстрация IPC namespace — создаём очередь сообщений
+    int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
+    if (msqid == -1)
+        die("msgget failed: %m\n");
+    printf("Created IPC message queue with id: %d\n", msqid);
+
+    // Снижаем привилегии пользователя внутри user namespace
     if (setgid(0) == -1)
         die("Failed to setgid: %m\n");
     if (setuid(0) == -1)
@@ -81,23 +120,31 @@ static int cmd_exec(void *arg)
     return 1;
 }
 
+/**
+ * @brief Записывает строку в файл, с обработкой ошибок
+ *
+ * @param path Путь к файлу
+ * @param line Строка для записи
+ */
 static void write_file(char path[100], char line[100])
 {
     FILE *f = fopen(path, "w");
-
     if (f == NULL) {
         die("Failed to open file %s: %m\n", path);
     }
-
     if (fwrite(line, 1, strlen(line), f) < 0) {
         die("Failed to write to file %s:\n", path);
     }
-
     if (fclose(f) != 0) {
         die("Failed to close file %s: %m\n", path);
     }
 }
 
+/**
+ * @brief Настраивает user namespace (маппинг UID/GID)
+ *
+ * @param pid PID дочернего процесса для настройки
+ */
 static void prepare_userns(int pid)
 {
     char path[100];
@@ -153,6 +200,11 @@ static void prepare_procfs()
         die("Failed to mount proc: %m\n");
 }
 
+/**
+ * @brief Настраивает network namespace, создаёт виртуальные интерфейсы, настраивает адреса
+ *
+ * @param cmd_pid PID дочернего процесса
+ */
 static void prepare_netns(int cmd_pid)
 {
     char *veth = "veth0";
@@ -184,38 +236,49 @@ static void prepare_netns(int cmd_pid)
     close(sock_fd);
 }
 
+/**
+ * @brief Главная функция программы. Создаёт пространство имён и клонирует процесс,
+ *        подключает процесс к cgroup с ограничениями.
+ *
+ * @param argc Количество аргументов
+ * @param argv Массив аргументов
+ * @return int Код возврата
+ */
 int main(int argc, char **argv)
 {
-
     struct params params;
     memset(&params, 0, sizeof(struct params));
 
     parse_args(argc, argv, &params);
 
-    // Create pipe to communicate between main and command process.
+    // Создаём pipe для связи между главным и дочерним процессом
     if (pipe(params.fd) < 0)
         die("Failed to create pipe: %m");
 
-    // Clone command process.
+    // Флаги для clone с пространствами имён, включая IPC
     int clone_flags =
-            // if the command process exits, it leaves an exit status
-            // so that we can reap it.
             SIGCHLD |
             CLONE_NEWUTS | CLONE_NEWUSER |
-            CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET;
+            CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWIPC;
+
+    // Клонируем дочерний процесс с изоляцией
     int cmd_pid = clone(
         cmd_exec, cmd_stack + STACKSIZE, clone_flags, &params);
 
     if (cmd_pid < 0)
         die("Failed to clone: %m\n");
 
-    // Get the writable end of the pipe.
+    // Подключаем процесс к cgroup с ограничениями ресурсов
+    cgroup_init_and_limit(cmd_pid);
+
+    // Конец pipe для записи
     int pipe = params.fd[1];
 
+    // Настраиваем user и network namespaces для дочернего процесса
     prepare_userns(cmd_pid);
     prepare_netns(cmd_pid);
 
-    // Signal to the command process we're done with setup.
+    // Сообщаем дочернему процессу, что настройка завершена
     if (write(pipe, "OK", 2) != 2)
         die("Failed to write to pipe: %m");
     if (close(pipe))

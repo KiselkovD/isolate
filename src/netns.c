@@ -13,6 +13,15 @@
 #include "netns.h"
 #include "util.h"
 
+/**
+ * @brief Добавляет атрибут (RT attribute) к Netlink сообщению.
+ * 
+ * @param n Указатель на Netlink заголовок
+ * @param maxlen Максимально допустимый размер сообщения
+ * @param type Тип атрибута (rta_type)
+ * @param data Указатель на данные для атрибута (может быть NULL)
+ * @param datalen Размер данных в байтах
+ */
 static void addattr_l(
         struct nlmsghdr *n, int maxlen, __u16 type,
         const void *data, __u16 datalen)
@@ -24,8 +33,7 @@ static void addattr_l(
         die("cannot add attribute. size (%d) exceeded maxlen (%d)\n",
             newlen, maxlen);
 
-    struct rtattr *rta;
-    rta = NLMSG_TAIL(n);
+    struct rtattr *rta = NLMSG_TAIL(n);
     rta->rta_type = type;
     rta->rta_len = attr_len;
     if (datalen)
@@ -34,20 +42,41 @@ static void addattr_l(
     n->nlmsg_len = newlen;
 }
 
+/**
+ * @brief Начинает вложенный атрибут (nested rtattr) в Netlink сообщении.
+ * 
+ * @param n Указатель на Netlink сообщение
+ * @param maxlen Максимально допустимый размер сообщения
+ * @param type Тип вложенного атрибута
+ * @return Указатель на начало вложенного атрибута для последующего закрытия
+ */
 static struct rtattr *addattr_nest(
         struct nlmsghdr *n, int maxlen, __u16 type)
 {
     struct rtattr *nest = NLMSG_TAIL(n);
-
     addattr_l(n, maxlen, type, NULL, 0);
     return nest;
 }
 
+/**
+ * @brief Завершает вложенный атрибут, устанавливая правильную длину.
+ * 
+ * @param n Указатель на Netlink сообщение
+ * @param nest Указатель на вложенный атрибут, начинавшийся addattr_nest()
+ */
 static void addattr_nest_end(struct nlmsghdr *n, struct rtattr *nest)
 {
     nest->rta_len = (void *)NLMSG_TAIL(n) - (void *)nest;
 }
 
+/**
+ * @brief Считывает ответ из Netlink сокета.
+ * 
+ * @param fd Дескриптор Netlink сокета
+ * @param msg Структура msghdr для recvmsg
+ * @param response Указатель на буфер для сохранения ответа
+ * @return Размер принятого сообщения, или завершение программы при ошибке
+ */
 static ssize_t read_response(
         int fd, struct msghdr *msg, char **response)
 {
@@ -66,6 +95,12 @@ static ssize_t read_response(
     return resp_len;
 }
 
+/**
+ * @brief Проверяет ответ Netlink сокета на ошибки.
+ * 
+ * @param sock_fd Дескриптор Netlink сокета
+ * @note Вызывает die() при обнаружении ошибки.
+ */
 static void check_response(int sock_fd)
 {
     struct iovec iov;
@@ -83,7 +118,6 @@ static void check_response(int sock_fd)
     int nlmsglen = hdr->nlmsg_len;
     int datalen = nlmsglen - sizeof(*hdr);
 
-    // Did we read all data?
     if (datalen < 0 || nlmsglen > resp_len) {
         if (msg.msg_flags & MSG_TRUNC)
             die("received truncated message\n");
@@ -91,7 +125,6 @@ static void check_response(int sock_fd)
         die("malformed message: nlmsg_len=%d\n", nlmsglen);
     }
 
-    // Was there an error?
     if (hdr->nlmsg_type == NLMSG_ERROR) {
         struct nlmsgerr *err = (struct nlmsgerr *) NLMSG_DATA(hdr);
 
@@ -107,6 +140,15 @@ static void check_response(int sock_fd)
     free(resp);
 }
 
+/**
+ * @brief Создаёт сетевой сокет с указанными параметрами.
+ * 
+ * @param domain Домен сокета (например, PF_INET, AF_NETLINK)
+ * @param type Тип сокета (например, SOCK_DGRAM, SOCK_RAW)
+ * @param protocol Протокол (например, IPPROTO_IP, NETLINK_ROUTE)
+ * @return Дескриптор созданного сокета
+ * @note Завершает программу при ошибке создания сокета.
+ */
 int create_socket(int domain, int type, int protocol)
 {
     int sock_fd = socket(domain, type, protocol);
@@ -116,6 +158,12 @@ int create_socket(int domain, int type, int protocol)
     return sock_fd;
 }
 
+/**
+ * @brief Отправляет Netlink сообщение и проверяет ответ.
+ * 
+ * @param sock_fd Дескриптор Netlink сокета
+ * @param n Указатель на Netlink сообщение, готовое к отправке
+ */
 static void send_nlmsg(int sock_fd, struct nlmsghdr *n)
 {
     struct iovec iov = {
@@ -139,6 +187,13 @@ static void send_nlmsg(int sock_fd, struct nlmsghdr *n)
     check_response(sock_fd);
 }
 
+/**
+ * @brief Получает дескриптор сетевого пространства имен процесса по его PID.
+ * 
+ * @param pid Идентификатор процесса
+ * @return Дескриптор сетевого пространства имен процесса
+ * @note Завершает программу при ошибке открытия файла netns.
+ */
 int get_netns_fd(int pid)
 {
     char path[256];
@@ -152,6 +207,13 @@ int get_netns_fd(int pid)
     return fd;
 }
 
+/**
+ * @brief Активирует сетевой интерфейс, назначая IP и маску.
+ * 
+ * @param ifname Имя интерфейса (например, "eth0")
+ * @param ip IP-адрес в виде строки (например, "192.168.1.10")
+ * @param netmask Маска подсети в виде строки (например, "255.255.255.0")
+ */
 void if_up(
         char *ifname, char *ip, char *netmask)
 {
@@ -159,7 +221,7 @@ void if_up(
 
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(struct ifreq));
-    strncpy(ifr.ifr_name, ifname, strlen(ifname));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
 
     struct sockaddr_in saddr;
     memset(&saddr, 0, sizeof(struct sockaddr_in));
@@ -169,12 +231,12 @@ void if_up(
     char *p = (char *) &saddr;
 
     saddr.sin_addr.s_addr = inet_addr(ip);
-    memcpy(((char *)&(ifr.ifr_addr)), p, sizeof(struct sockaddr));
+    memcpy(&ifr.ifr_addr, p, sizeof(struct sockaddr));
     if (ioctl(sock_fd, SIOCSIFADDR, &ifr))
         die("cannot set ip addr %s, %s: %m\n", ifname, ip);
 
     saddr.sin_addr.s_addr = inet_addr(netmask);
-    memcpy(((char *)&(ifr.ifr_addr)), p, sizeof(struct sockaddr));
+    memcpy(&ifr.ifr_addr, p, sizeof(struct sockaddr));
     if (ioctl(sock_fd, SIOCSIFNETMASK, &ifr))
         die("cannot set netmask for addr %s, %s: %m\n", ifname, netmask);
 
@@ -186,11 +248,17 @@ void if_up(
     close(sock_fd);
 }
 
+/**
+ * @brief Создает пару виртуальных Ethernet интерфейсов (veth pair) с заданными именами.
+ * 
+ * @param sock_fd Дескриптор Netlink сокета
+ * @param ifname Имя первой стороны veth (например, "veth0")
+ * @param peername Имя второй стороны veth (например, "veth1")
+ */
 void create_veth(int sock_fd, char *ifname, char *peername)
 {
-    // ip link add veth0 type veth peer name veth1
-    __u16 flags =
-            NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
+    // Формируем Netlink запрос на создание link
+    __u16 flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
     struct nl_req req = {
             .n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
             .n.nlmsg_flags = flags,
@@ -202,15 +270,12 @@ void create_veth(int sock_fd, char *ifname, char *peername)
 
     addattr_l(n, maxlen, IFLA_IFNAME, ifname, strlen(ifname) + 1);
 
-    struct rtattr *linfo =
-            addattr_nest(n, maxlen, IFLA_LINKINFO);
+    struct rtattr *linfo = addattr_nest(n, maxlen, IFLA_LINKINFO);
     addattr_l(&req.n, sizeof(req), IFLA_INFO_KIND, "veth", 5);
 
-    struct rtattr *linfodata =
-            addattr_nest(n, maxlen, IFLA_INFO_DATA);
+    struct rtattr *linfodata = addattr_nest(n, maxlen, IFLA_INFO_DATA);
 
-    struct rtattr *peerinfo =
-            addattr_nest(n, maxlen, VETH_INFO_PEER);
+    struct rtattr *peerinfo = addattr_nest(n, maxlen, VETH_INFO_PEER);
     n->nlmsg_len += sizeof(struct ifinfomsg);
     addattr_l(n, maxlen, IFLA_IFNAME, peername, strlen(peername) + 1);
     addattr_nest_end(n, peerinfo);
@@ -221,9 +286,15 @@ void create_veth(int sock_fd, char *ifname, char *peername)
     send_nlmsg(sock_fd, n);
 }
 
+/**
+ * @brief Перемещает сетевой интерфейс в сетевое пространство имен процесса.
+ * 
+ * @param sock_fd Дескриптор Netlink сокета
+ * @param ifname Имя интерфейса для перемещения
+ * @param netns Файловый дескриптор сетевого пространства имен назначения
+ */
 void move_if_to_pid_netns(int sock_fd, char *ifname, int netns)
 {
-    // ip link set veth1 netns coke
     struct nl_req req = {
             .n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg)),
             .n.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK,
@@ -231,8 +302,7 @@ void move_if_to_pid_netns(int sock_fd, char *ifname, int netns)
             .i.ifi_family = PF_NETLINK,
     };
 
-    addattr_l(&req.n, sizeof(req), IFLA_NET_NS_FD, &netns, 4);
-    addattr_l(&req.n, sizeof(req), IFLA_IFNAME,
-              ifname, strlen(ifname) + 1);
+    addattr_l(&req.n, sizeof(req), IFLA_NET_NS_FD, &netns, sizeof(netns));
+    addattr_l(&req.n, sizeof(req), IFLA_IFNAME, ifname, strlen(ifname) + 1);
     send_nlmsg(sock_fd, &req.n);
 }
