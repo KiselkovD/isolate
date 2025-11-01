@@ -10,8 +10,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
-#include "netns.h"
-#include "util.h"
+#include "../include/netns.h"
+#include "../include/util.h"
 
 /**
  * @brief Добавляет атрибут (RT attribute) к Netlink сообщению.

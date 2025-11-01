@@ -13,9 +13,9 @@
 #include <errno.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
-#include "util.h"
-#include "netns.h"
-#include "cgroup_control.h"
+#include "../include/util.h"
+#include "../include/netns.h"
+#include "../include/cgroup_control.h"
 
 /**
  * @brief Настраивает mount namespace с pivot_root и монтирует procfs
@@ -95,7 +95,7 @@ static int cmd_exec(void *arg)
     await_setup(params->fd[0]);
 
     // Настраиваем mount namespace с корневой файловой системой rootfs
-    prepare_mntns("rootfs");
+    prepare_mntns("../rootfs");
 
     // Демонстрация IPC namespace — создаём очередь сообщений
     int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
